@@ -39,7 +39,7 @@ export interface ConnectionStateConnected extends ConnectionState {
 
 export interface ConnectionStateConnecting extends ConnectionState {
     tag: "connecting";
-    serviceProvider: NodeDriverServiceProvider;
+    serviceProvider: Promise<NodeDriverServiceProvider>;
     oidcConnectionType: OIDCConnectionAuthType;
     oidcLoginUrl?: string;
     oidcUserCode?: string;
@@ -100,7 +100,6 @@ export abstract class ConnectionManager {
     }
 
     abstract connect(settings: ConnectionSettings): Promise<AnyConnectionState>;
-
     abstract disconnect(): Promise<ConnectionStateDisconnected | ConnectionStateErrored>;
 }
 
@@ -118,6 +117,7 @@ export class MCPConnectionManager extends ConnectionManager {
         super();
         this.bus = bus ?? new EventEmitter();
         this.bus.on("mongodb-oidc-plugin:auth-failed", this.onOidcAuthFailed.bind(this));
+        // eslint-disable-next-line @typescript-eslint/no-misused-promises
         this.bus.on("mongodb-oidc-plugin:auth-succeeded", this.onOidcAuthSucceeded.bind(this));
         this.deviceId = deviceId;
     }
@@ -129,9 +129,10 @@ export class MCPConnectionManager extends ConnectionManager {
             await this.disconnect();
         }
 
-        let serviceProvider: NodeDriverServiceProvider;
+        let serviceProvider: Promise<NodeDriverServiceProvider>;
         let connectionInfo: ConnectionInfo;
         let connectionStringAuthType: ConnectionStringAuthType = "scram";
+        let isOidcConnection: boolean = false;
 
         try {
             settings = { ...settings };
@@ -165,7 +166,8 @@ export class MCPConnectionManager extends ConnectionManager {
                 connectionInfo
             );
 
-            serviceProvider = await NodeDriverServiceProvider.connect(
+            isOidcConnection = connectionStringAuthType.startsWith("oidc");
+            serviceProvider = NodeDriverServiceProvider.connect(
                 connectionInfo.connectionString,
                 {
                     productDocsLink: "https://github.com/mongodb-js/mongodb-mcp-server/",
@@ -187,26 +189,23 @@ export class MCPConnectionManager extends ConnectionManager {
         }
 
         try {
-            if (connectionStringAuthType.startsWith("oidc")) {
-                void this.pingAndForget(serviceProvider);
-
-                return this.changeState("connection-request", {
-                    tag: "connecting",
+            if (!isOidcConnection) {
+                return this.changeState("connection-success", {
+                    tag: "connected",
                     connectedAtlasCluster: settings.atlas,
+                    serviceProvider: await serviceProvider,
+                    connectionStringAuthType,
+                });
+            } else {
+                this.changeState("connection-request", {
+                    tag: "connecting",
                     serviceProvider,
+                    connectedAtlasCluster: settings.atlas,
                     connectionStringAuthType,
                     oidcConnectionType: connectionStringAuthType as OIDCConnectionAuthType,
                 });
+                return this.currentConnectionState;
             }
-
-            await serviceProvider?.runCommand?.("admin", { hello: 1 });
-
-            return this.changeState("connection-success", {
-                tag: "connected",
-                connectedAtlasCluster: settings.atlas,
-                serviceProvider,
-                connectionStringAuthType,
-            });
         } catch (error: unknown) {
             const errorReason = error instanceof Error ? error.message : `${error as string}`;
             this.changeState("connection-error", {
@@ -226,7 +225,13 @@ export class MCPConnectionManager extends ConnectionManager {
 
         if (this.currentConnectionState.tag === "connected" || this.currentConnectionState.tag === "connecting") {
             try {
-                await this.currentConnectionState.serviceProvider?.close(true);
+                if (this.currentConnectionState.tag === "connected") {
+                    await this.currentConnectionState.serviceProvider?.close();
+                }
+                if (this.currentConnectionState.tag === "connecting") {
+                    const serviceProvider = await this.currentConnectionState.serviceProvider;
+                    await serviceProvider.close();
+                }
             } finally {
                 this.changeState("connection-close", {
                     tag: "disconnected",
@@ -246,12 +251,16 @@ export class MCPConnectionManager extends ConnectionManager {
         }
     }
 
-    private onOidcAuthSucceeded(): void {
+    private async onOidcAuthSucceeded(): Promise<void> {
         if (
             this.currentConnectionState.tag === "connecting" &&
             this.currentConnectionState.connectionStringAuthType?.startsWith("oidc")
         ) {
-            this.changeState("connection-success", { ...this.currentConnectionState, tag: "connected" });
+            this.changeState("connection-success", {
+                ...this.currentConnectionState,
+                tag: "connected",
+                serviceProvider: await this.currentConnectionState.serviceProvider,
+            });
         }
 
         this.logger.info({
@@ -315,18 +324,6 @@ export class MCPConnectionManager extends ConnectionManager {
             case null:
             default:
                 return "scram";
-        }
-    }
-
-    private async pingAndForget(serviceProvider: NodeDriverServiceProvider): Promise<void> {
-        try {
-            await serviceProvider?.runCommand?.("admin", { hello: 1 });
-        } catch (error: unknown) {
-            this.logger.warning({
-                id: LogId.oidcFlow,
-                context: "pingAndForget",
-                message: String(error),
-            });
         }
     }
 

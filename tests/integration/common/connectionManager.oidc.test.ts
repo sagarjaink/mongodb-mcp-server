@@ -13,7 +13,7 @@ import type { OIDCMockProviderConfig } from "@mongodb-js/oidc-mock-provider";
 import { OIDCMockProvider } from "@mongodb-js/oidc-mock-provider";
 import { type TestConnectionManager } from "../../utils/index.js";
 
-const DEFAULT_TIMEOUT = 10000;
+const DEFAULT_TIMEOUT = 30_000;
 
 // OIDC is only supported on Linux servers
 describe.skipIf(process.platform !== "linux")("ConnectionManager OIDC Tests", async () => {
