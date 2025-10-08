@@ -82,7 +82,7 @@ class UnusableVoyageTool extends MongoDBToolBase {
 }
 
 describe("MongoDBTool implementations", () => {
-    const mdbIntegration = setupMongoDBIntegrationTest({ enterprise: false }, []);
+    const mdbIntegration = setupMongoDBIntegrationTest();
 
     let mcpClient: Client | undefined;
     let mcpServer: Server | undefined;
