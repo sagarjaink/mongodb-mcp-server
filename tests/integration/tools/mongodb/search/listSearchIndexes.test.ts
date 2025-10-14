@@ -117,9 +117,9 @@ describeWithMongoDB(
             );
         });
     },
-    undefined, // default user config
-    undefined, // default driver config
-    { search: true } // use a search cluster
+    {
+        downloadOptions: { search: true },
+    }
 );
 
 async function waitUntilSearchIsReady(provider: NodeDriverServiceProvider, abortSignal: AbortSignal): Promise<void> {
