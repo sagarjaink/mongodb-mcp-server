@@ -6,7 +6,7 @@ import { EJSON } from "bson";
 
 export type SearchIndexStatus = {
     name: string;
-    type: string;
+    type: "search" | "vectorSearch";
     status: string;
     queryable: boolean;
     latestDefinition: Document;
@@ -20,6 +20,8 @@ export class ListSearchIndexesTool extends MongoDBToolBase {
 
     protected async execute({ database, collection }: ToolArgs<typeof DbOperationArgs>): Promise<CallToolResult> {
         const provider = await this.ensureConnected();
+        await this.ensureSearchIsSupported();
+
         const indexes = await provider.getSearchIndexes(database, collection);
         const trimmedIndexDefinitions = this.pickRelevantInformation(indexes);
 
@@ -27,7 +29,7 @@ export class ListSearchIndexesTool extends MongoDBToolBase {
             return {
                 content: formatUntrustedData(
                     `Found ${trimmedIndexDefinitions.length} search and vector search indexes in ${database}.${collection}`,
-                    trimmedIndexDefinitions.map((index) => EJSON.stringify(index)).join("\n")
+                    ...trimmedIndexDefinitions.map((index) => EJSON.stringify(index))
                 ),
             };
         } else {
@@ -54,28 +56,10 @@ export class ListSearchIndexesTool extends MongoDBToolBase {
     protected pickRelevantInformation(indexes: Record<string, unknown>[]): SearchIndexStatus[] {
         return indexes.map((index) => ({
             name: (index["name"] ?? "default") as string,
-            type: (index["type"] ?? "UNKNOWN") as string,
+            type: (index["type"] ?? "UNKNOWN") as "search" | "vectorSearch",
             status: (index["status"] ?? "UNKNOWN") as string,
             queryable: (index["queryable"] ?? false) as boolean,
             latestDefinition: index["latestDefinition"] as Document,
         }));
-    }
-
-    protected handleError(
-        error: unknown,
-        args: ToolArgs<typeof DbOperationArgs>
-    ): Promise<CallToolResult> | CallToolResult {
-        if (error instanceof Error && "codeName" in error && error.codeName === "SearchNotEnabled") {
-            return {
-                content: [
-                    {
-                        text: "This MongoDB cluster does not support Search Indexes. Make sure you are using an Atlas Cluster, either remotely in Atlas or using the Atlas Local image, or your cluster supports MongoDB Search.",
-                        type: "text",
-                        isError: true,
-                    },
-                ],
-            };
-        }
-        return super.handleError(error, args);
     }
 }
