@@ -1,10 +1,11 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { NodeDriverServiceProvider } from "@mongosh/service-provider-node-driver";
 import type { ToolArgs, OperationType } from "../../tool.js";
 import { DbOperationArgs, MongoDBToolBase } from "../mongodbTool.js";
 import { formatUntrustedData } from "../../tool.js";
 import { EJSON } from "bson";
 
-export type SearchIndexStatus = {
+export type SearchIndexWithStatus = {
     name: string;
     type: "search" | "vectorSearch";
     status: string;
@@ -21,15 +22,13 @@ export class ListSearchIndexesTool extends MongoDBToolBase {
     protected async execute({ database, collection }: ToolArgs<typeof DbOperationArgs>): Promise<CallToolResult> {
         const provider = await this.ensureConnected();
         await this.ensureSearchIsSupported();
+        const searchIndexes = await ListSearchIndexesTool.getSearchIndexes(provider, database, collection);
 
-        const indexes = await provider.getSearchIndexes(database, collection);
-        const trimmedIndexDefinitions = this.pickRelevantInformation(indexes);
-
-        if (trimmedIndexDefinitions.length > 0) {
+        if (searchIndexes.length > 0) {
             return {
                 content: formatUntrustedData(
-                    `Found ${trimmedIndexDefinitions.length} search and vector search indexes in ${database}.${collection}`,
-                    ...trimmedIndexDefinitions.map((index) => EJSON.stringify(index))
+                    `Found ${searchIndexes.length} search and vector search indexes in ${database}.${collection}`,
+                    ...searchIndexes.map((index) => EJSON.stringify(index))
                 ),
             };
         } else {
@@ -47,14 +46,19 @@ export class ListSearchIndexesTool extends MongoDBToolBase {
         return process.env.VITEST === "true";
     }
 
-    /**
-     * Atlas Search index status contains a lot of information that is not relevant for the agent at this stage.
-     * Like for example, the status on each of the dedicated nodes. We only care about the main status, if it's
-     * queryable and the index name. We are also picking the index definition as it can be used by the agent to
-     * understand which fields are available for searching.
-     **/
-    protected pickRelevantInformation(indexes: Record<string, unknown>[]): SearchIndexStatus[] {
-        return indexes.map((index) => ({
+    static async getSearchIndexes(
+        provider: NodeDriverServiceProvider,
+        database: string,
+        collection: string
+    ): Promise<SearchIndexWithStatus[]> {
+        const searchIndexes = await provider.getSearchIndexes(database, collection);
+        /**
+         * Atlas Search index status contains a lot of information that is not relevant for the agent at this stage.
+         * Like for example, the status on each of the dedicated nodes. We only care about the main status, if it's
+         * queryable and the index name. We are also picking the index definition as it can be used by the agent to
+         * understand which fields are available for searching.
+         **/
+        return searchIndexes.map<SearchIndexWithStatus>((index) => ({
             name: (index["name"] ?? "default") as string,
             type: (index["type"] ?? "UNKNOWN") as "search" | "vectorSearch",
             status: (index["status"] ?? "UNKNOWN") as string,
